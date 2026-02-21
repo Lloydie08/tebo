@@ -1,5 +1,7 @@
 import re
 import json
+import csv
+import io
 import html as html_module
 from datetime import datetime, timezone
 
@@ -50,7 +52,7 @@ SAMESITE_MAP = {
     "unspecified":    "Lax",
 }
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
+# ── Helpers ──────────────────────────────────────────────────────────────────────────────
 
 def country_code_to_flag(code: str) -> str:
     if not code or len(code) < 2:
@@ -114,7 +116,7 @@ def safe_get(d, *keys):
         d = d.get(k)
     return d
 
-# ── Universal Cookie Parser ────────────────────────────────────────────────────
+# ── Universal Cookie Parser ────────────────────────────────────────────────────────────
 
 def parse_cookies_from_text(text: str) -> list[list]:
     text    = text.strip()
@@ -198,7 +200,33 @@ def parse_cookies_from_text(text: str) -> list[list]:
 
     return results
 
-# ── Core Validator ─────────────────────────────────────────────────────────────
+
+def parse_cookies_from_csv(text: str) -> list[list]:
+    """Parse cookies from a CSV file that has a 'cookies' column."""
+    results = []
+    try:
+        reader = csv.DictReader(io.StringIO(text))
+        for row in reader:
+            # Support 'cookies' column in any casing
+            raw = (
+                row.get('cookies') or
+                row.get('Cookies') or
+                row.get('COOKIES') or ''
+            ).strip()
+            if not raw:
+                continue
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list) and len(parsed) > 0:
+                    results.append(parsed)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return results
+
+
+# ── Core Validator ─────────────────────────────────────────────────────────────────────
 
 async def validate_netflix_cookies(browser, cookies_list: list) -> dict:
     context = await browser.new_context()

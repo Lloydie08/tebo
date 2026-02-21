@@ -12,7 +12,7 @@ from telegram.ext import (
     MessageHandler, ConversationHandler, filters, ContextTypes,
 )
 from playwright.async_api import async_playwright
-from checker  import validate_netflix_cookies, mask_email, parse_cookies_from_text
+from checker import validate_netflix_cookies, mask_email, parse_cookies_from_text, parse_cookies_from_csv
 from database import (
     save_cookie, update_cookie_result,
     get_all_cookies, get_sorted_cookies,
@@ -40,7 +40,7 @@ OUTPUT_FIELDS = [
     'premium_detected', 'watch_link',
 ]
 
-# ── Keyboards ──────────────────────────────────────────────────────────────────
+# ── Keyboards ──────────────────────────────────────────────────────────────────────────────
 
 def main_menu_keyboard():
     return InlineKeyboardMarkup([
@@ -49,7 +49,7 @@ def main_menu_keyboard():
             InlineKeyboardButton("💎 Add Premium Cookie", callback_data="add_premium"),
         ],
         [
-            InlineKeyboardButton("📦 Bulk Import TXT",    callback_data="bulk_import"),
+            InlineKeyboardButton("📦 Bulk Import TXT/CSV", callback_data="bulk_import"),
             InlineKeyboardButton("🔍 Check All Cookies",  callback_data="check_all"),
         ],
         [
@@ -67,7 +67,7 @@ def bulk_type_keyboard():
         [InlineKeyboardButton("❌ Cancel", callback_data="cancel_bulk")],
     ])
 
-# ── /start ─────────────────────────────────────────────────────────────────────
+# ── /start ─────────────────────────────────────────────────────────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total         = get_row_count()
@@ -75,7 +75,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     premium_count = total - free_count
 
     await update.message.reply_text(
-        f"🎬 *Netflix Cookie Manager*\n\n"
+        f"🎥 *Netflix Cookie Manager*\n\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"🆓 Free: `{free_count}` | 💎 Premium: `{premium_count}`\n"
         f"📋 Total: `{total}`\n"
@@ -86,7 +86,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
-# ── /debug ─────────────────────────────────────────────────────────────────────
+# ── /debug ─────────────────────────────────────────────────────────────────────────────
 
 async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -114,7 +114,7 @@ async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ *Debug Error:*\n`{e}`", parse_mode="Markdown")
 
-# ── /env ───────────────────────────────────────────────────────────────────────
+# ── /env ─────────────────────────────────────────────────────────────────────────────
 
 async def env_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url   = os.getenv("SUPABASE_URL",        "❌ NOT SET")
@@ -128,7 +128,7 @@ async def env_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
     )
 
-# ── Button Handler ─────────────────────────────────────────────────────────────
+# ── Button Handler ────────────────────────────────────────────────────────────────────
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -159,14 +159,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         label = "💎 Premium" if context.user_data["bulk_is_premium"] else "🆓 Free"
         await query.edit_message_text(
             f"📦 *Bulk Import — {label}*\n\n"
-            f"Send a `.txt` file containing one or more cookie arrays.\n\n"
+            f"Send a `.txt` or `.csv` file containing cookie arrays.\n\n"
             f"*Supported formats:*\n"
-            f"• One JSON array per line\n"
-            f"• Multiple arrays separated by blank lines\n"
-            f"• Array of arrays `[[...],[...]]`\n"
-            f"• Netscape tab-separated format\n\n"
+            f"• `.txt` — One JSON array per line\n"
+            f"• `.txt` — Multiple arrays / Netscape format\n"
+            f"• `.csv` — Must have a `cookies` column with JSON arrays\n\n"
+            f"_Tip: The CSV exported by this bot can be re\-imported directly\._\n\n"
             f"Send /cancel to go back.",
-            parse_mode="Markdown",
+            parse_mode="MarkdownV2",
         )
         return BULK_TYPE
 
@@ -188,7 +188,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return ConversationHandler.END
 
-# ── Receive Single Cookie ──────────────────────────────────────────────────────
+# ── Receive Single Cookie ──────────────────────────────────────────────────────────────
 
 async def receive_cookies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text       = update.message.text.strip()
@@ -208,7 +208,7 @@ async def receive_cookies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _check_then_save(update.message, cookies_list, is_premium)
     return ConversationHandler.END
 
-# ── Core: Check → Dedupe → Save ───────────────────────────────────────────────
+# ── Core: Check → Dedupe → Save ────────────────────────────────────────────────────
 
 async def _check_then_save(message, cookies_list: list, is_premium: bool):
     label = "💎 Premium" if is_premium else "🆓 Free"
@@ -308,23 +308,27 @@ async def _check_then_save(message, cookies_list: list, is_premium: bool):
         reply_markup=main_menu_keyboard(),
     )
 
-# ── /cancel ────────────────────────────────────────────────────────────────────
+# ── /cancel ────────────────────────────────────────────────────────────────────────────
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Cancelled.", reply_markup=main_menu_keyboard())
     return ConversationHandler.END
 
-# ── Bulk TXT Import ────────────────────────────────────────────────────────────
+# ── Bulk TXT/CSV Import ──────────────────────────────────────────────────────────────
 
 async def receive_bulk_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    doc = update.message.document
-    if not doc or not doc.file_name.lower().endswith(".txt"):
-        await update.message.reply_text("❌ Please send a `.txt` file.")
+    doc   = update.message.document
+    fname = doc.file_name.lower() if doc else ""
+
+    if not doc or not (fname.endswith(".txt") or fname.endswith(".csv")):
+        await update.message.reply_text("❌ Please send a `.txt` or `.csv` file.")
         return BULK_TYPE
 
+    is_csv     = fname.endswith(".csv")
     is_premium = context.user_data.get("bulk_is_premium", False)
     label      = "💎 Premium" if is_premium else "🆓 Free"
-    msg        = await update.message.reply_text("📖 Reading file...")
+    file_type  = "CSV" if is_csv else "TXT"
+    msg        = await update.message.reply_text(f"📖 Reading {file_type} file...")
 
     try:
         tg_file = await doc.get_file()
@@ -334,20 +338,31 @@ async def receive_bulk_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"❌ Failed to read file:\n`{e}`", parse_mode="Markdown")
         return ConversationHandler.END
 
-    cookie_sets = parse_cookies_from_text(text)
-    if not cookie_sets:
-        await msg.edit_text(
-            "❌ *No valid cookie arrays found.*\n\n"
-            "Make sure the file contains JSON arrays `[{...}]`.",
-            parse_mode="Markdown",
-        )
-        return ConversationHandler.END
+    if is_csv:
+        cookie_sets = parse_cookies_from_csv(text)
+        if not cookie_sets:
+            await msg.edit_text(
+                "❌ *No valid cookie arrays found in CSV.*\n\n"
+                "Make sure the file has a `cookies` column with JSON arrays `[{...}]`.\n\n"
+                "_Tip: The exported CSV from this bot already has the correct format._",
+                parse_mode="Markdown",
+            )
+            return ConversationHandler.END
+    else:
+        cookie_sets = parse_cookies_from_text(text)
+        if not cookie_sets:
+            await msg.edit_text(
+                "❌ *No valid cookie arrays found.*\n\n"
+                "Make sure the file contains JSON arrays `[{...}]`.",
+                parse_mode="Markdown",
+            )
+            return ConversationHandler.END
 
     total    = len(cookie_sets)
     counters = {"saved": 0, "dead": 0, "duplicate": 0, "errors": 0, "done": 0}
 
     await msg.edit_text(
-        f"📦 *Bulk Import — {label}*\n\n"
+        f"📦 *Bulk Import — {label}* ({file_type})\n\n"
         f"📂 Found *{total}* cookie sets\n"
         f"⏳ Validating & saving... 0/{total}",
         parse_mode="Markdown",
@@ -395,7 +410,7 @@ async def receive_bulk_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     counters["duplicate"], counters["errors"],
                                 )
                             await msg.edit_text(
-                                f"📦 *Bulk Import — {label}*\n\n"
+                                f"📦 *Bulk Import — {label}* ({file_type})\n\n"
                                 f"⏳ Progress: {done}/{total}\n\n"
                                 f"✅ Saved: {s}\n"
                                 f"❌ Dead: {d}\n"
@@ -436,7 +451,7 @@ async def receive_bulk_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
-# ── Check All — validate, delete dead, renumber ───────────────────────────────
+# ── Check All — validate, delete dead, renumber ─────────────────────────────────
 
 async def run_check_all(message, context: ContextTypes.DEFAULT_TYPE):
     rows = get_all_cookies()
@@ -533,7 +548,7 @@ async def run_check_all(message, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_keyboard(),
     )
 
-# ── Remove Duplicates ──────────────────────────────────────────────────────────
+# ── Remove Duplicates ───────────────────────────────────────────────────────────
 
 async def run_dedupe(message, context: ContextTypes.DEFAULT_TYPE):
     removed       = remove_duplicate_emails()
@@ -560,7 +575,7 @@ async def run_dedupe(message, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_menu_keyboard(),
         )
 
-# ── Export CSV ─────────────────────────────────────────────────────────────────
+# ── Export CSV ─────────────────────────────────────────────────────────────────────
 
 async def export_csv(message, context: ContextTypes.DEFAULT_TYPE):
     rows = get_sorted_cookies()  # free first, premium last, display_id 1..N
@@ -608,7 +623,7 @@ async def export_csv(message, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
     )
 
-# ── Main ───────────────────────────────────────────────────────────────────────
+# ── Main ─────────────────────────────────────────────────────────────────────────────
 
 def main():
     if not BOT_TOKEN:
